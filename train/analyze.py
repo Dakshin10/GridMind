@@ -19,13 +19,13 @@ from env.gridops_env import GridOpsEnv
 SEEDS = [0, 1, 2]
 
 COLORS = {
-    "baseline":       "#e07b39",
-    "selfish":        "#c0392b",
-    "coordinated":    "#27ae60",
-    "advanced":       "#2980b9",
+    "baseline":       "#7f7f7f",
+    "selfish":        "#d62728",
+    "coordinated":    "#1f77b4",
+    "advanced":       "#2ca02c",
     "no_reputation":  "#8e44ad",
-    "no_negotiation": "#d35400",
-    "no_memory":      "#7f8c8d",
+    "no_negotiation": "#e6550d",
+    "no_memory":      "#969696",
     "full_system":    "#16a085",
 }
 
@@ -39,8 +39,7 @@ def _make_ablation_env(variant, seed):
     Build a coordinated/global env with one component surgically disabled.
     All disabled via public hyperparameter attributes (no env internals touched).
     """
-    env = GridOpsEnv(num_zones=3, max_time=50, seed=seed)
-    env.set_mode("coordinated")
+    env = GridOpsEnv(num_zones=3, max_steps=50, seed=seed, mode="coordinated")
     env.set_reward_mode("global")
 
     if variant == "no_reputation":
@@ -237,27 +236,31 @@ def plot_delay_effects(histories, save_dir):
 
 def plot_tradeoff_curve(histories, save_dir):
     """
-    Scatter: x = mean local reward per episode, y = mean stability per episode.
-    Each point = one seed run. Shows selfish high-reward/low-stability tradeoff.
+    Scatter: x = mean local reward, y = mean stability.
+    Advanced gets larger marker + Pareto Optimal label.
     """
     fig, ax = plt.subplots(figsize=(8, 6))
 
     for name in ["baseline", "selfish", "coordinated", "advanced"]:
-        xs, ys = [], []
-        for h in histories[name]:
-            local_r  = float(np.mean(h.get("reward", [0])))
-            stability = float(np.mean(h.get("stability", [1])))
-            xs.append(local_r)
-            ys.append(stability)
+        xs = [float(np.mean(h.get("reward",    [0]))) for h in histories[name]]
+        ys = [float(np.mean(h.get("stability", [1]))) for h in histories[name]]
+        ms = 220 if name == "advanced" else 130
+        ec = "black" if name == "advanced" else "white"
+        lw = 2.0  if name == "advanced" else 0.8
         ax.scatter(xs, ys, label=name, color=COLORS.get(name, "grey"),
-                   s=150, zorder=5, edgecolors="white", linewidths=1.0)
-        # Annotate centroid
+                   s=ms, zorder=5, edgecolors=ec, linewidths=lw)
         ax.annotate(name, (float(np.mean(xs)), float(np.mean(ys))),
                     textcoords="offset points", xytext=(6, 4),
                     fontsize=10, color=COLORS.get(name, "grey"), fontweight="bold")
 
+    adv_x = float(np.mean([np.mean(h.get("reward",    [0])) for h in histories["advanced"]]))
+    adv_y = float(np.mean([np.mean(h.get("stability", [1])) for h in histories["advanced"]]))
+    ax.text(adv_x - 1, adv_y + 0.03, "[*] Pareto Optimal",
+            fontsize=11, color=COLORS["advanced"], fontweight="bold")
+
     ax.set_title("Tradeoff — Local Reward vs Grid Stability\n"
-                 "(selfish = high reward, low stability; advanced = balanced optimum)", fontsize=14)
+                 "(selfish = high reward, low stability; advanced = balanced optimum)",
+                 fontsize=14, fontweight="bold")
     ax.set_xlabel("Avg Episode Reward", fontsize=12)
     ax.set_ylabel("Avg Stability Score", fontsize=12)
     ax.legend(fontsize=10)
@@ -272,7 +275,7 @@ def plot_tradeoff_curve(histories, save_dir):
 def plot_cascade_delay(histories, save_dir):
     """
     For each mode, overlay overloads(t) and blackouts(t+2).
-    Demonstrates that delayed failures follow overload events.
+    Vertical lines mark overload and delayed blackout events.
     """
     fig, axes = plt.subplots(1, 2, figsize=(13, 4))
 
@@ -288,10 +291,23 @@ def plot_cascade_delay(histories, save_dir):
 
         steps = np.arange(min_len)
         ax.plot(steps, ov_mean, label="Overloads (t)",
-                color="#c0392b", linewidth=2.5)
+                color="#d62728", linewidth=2.5)
         ax.plot(steps, shifted, label="Blackouts (t+2)",
                 color="#e67e22", linewidth=2.5, linestyle="--")
-        ax.set_title(f"Cascade Delay — {name} mode", fontsize=14)
+
+        # Mark a representative overload + delayed failure
+        if ov_mean.max() > 0:
+            t0 = int(np.argmax(ov_mean))
+            ax.axvline(t0, color="#d62728", linewidth=1.2, alpha=0.5, linestyle=":")
+            t2 = min(t0 + 2, min_len - 1)
+            ax.axvline(t2, color="#e67e22", linewidth=1.2, alpha=0.5, linestyle=":")
+            ax.annotate("delayed\nfailure",
+                        xy=(t2, shifted[t2]),
+                        xytext=(t2 + 2, shifted[t2] + 0.3),
+                        arrowprops=dict(arrowstyle="->", color="#e67e22", lw=1.2),
+                        fontsize=9, color="#e67e22", fontweight="bold")
+
+        ax.set_title(f"Cascade Delay — {name} mode", fontsize=14, fontweight="bold")
         ax.set_xlabel("Step", fontsize=12)
         ax.set_ylabel("Count", fontsize=12)
         ax.legend(fontsize=10)
@@ -299,7 +315,6 @@ def plot_cascade_delay(histories, save_dir):
 
     fig.suptitle("Delayed Cascade Effect: Overloads Drive Future Blackouts",
                  fontsize=16, fontweight="bold")
-    plt.tight_layout()
     _save(fig, os.path.join(save_dir, "cascade_delay.png"))
 
 
@@ -309,7 +324,8 @@ def plot_cascade_delay(histories, save_dir):
 
 def _save(fig, path):
     os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
-    fig.savefig(path, dpi=120, bbox_inches="tight")
+    plt.tight_layout()
+    fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved -> {path}")
 

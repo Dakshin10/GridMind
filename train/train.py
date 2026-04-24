@@ -46,8 +46,8 @@ def run_episode(env, demo_log=False):
         obs, reward, term, trunc, info = env.step(None)
         done = term or trunc
 
-        if demo_log and env.time == 12:
-            print(f"\n[STEP {env.time}]")
+        if demo_log and env.time_step == 12:
+            print(f"\n[STEP {env.time_step}]")
             print(f"Mode: {env.mode}")
             print(f"Blackouts: {info.get('blackouts', 0)}")
             print(f"Misreporting: {info.get('honesty_violations', 0)}")
@@ -80,8 +80,7 @@ def run_all(seeds=SEEDS):
 
     for seed in seeds:
         for name, mode, reward_mode in CONFIGS:
-            env = GridOpsEnv(num_zones=3, max_time=50, seed=seed)
-            env.set_mode(mode)
+            env = GridOpsEnv(num_zones=3, max_steps=50, seed=seed, mode=mode)
             env.set_reward_mode(reward_mode)
 
             demo = (seed == 0 and name == "coordinated")
