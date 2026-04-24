@@ -1,0 +1,30 @@
+{
+    "no_reputation": {
+        "avg_reward": 37.576056939400964,
+        "avg_blackouts": 1.1933333333333334,
+        "avg_stability": 0.5733333333333334,
+        "avg_misreporting": 0.013333333333333334,
+        "avg_coalition": 0.44666666666666666
+    },
+    "no_negotiation": {
+        "avg_reward": 34.95844669602583,
+        "avg_blackouts": 0.86,
+        "avg_stability": 0.6927777777777777,
+        "avg_misreporting": 0.01111111111111111,
+        "avg_coalition": 0.0
+    },
+    "no_memory": {
+        "avg_reward": 36.091780029359164,
+        "avg_blackouts": 0.86,
+        "avg_stability": 0.6927777777777777,
+        "avg_misreporting": 0.01111111111111111,
+        "avg_coalition": 0.5666666666666667
+    },
+    "full_system": {
+        "avg_reward": 36.091780029359164,
+        "avg_blackouts": 0.86,
+        "avg_stability": 0.6927777777777777,
+        "avg_misreporting": 0.01111111111111111,
+        "avg_coalition": 0.5666666666666667
+    }
+}

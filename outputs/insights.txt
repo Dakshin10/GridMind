@@ -1,0 +1,4 @@
+- Selfish agents maximize local reward but destabilize the grid
+- Reputation reduces misreporting by ~98%
+- Coalition formation improves stability significantly
+- Coordination aligns local and global objectives

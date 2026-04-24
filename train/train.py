@@ -8,63 +8,110 @@ from env.gridops_env import GridOpsEnv
 
 
 # ----------------------------------------------------------------------
+# Configurations  (name, mode, reward_mode)
+# "advanced" is coordinated + global — demonstrating the full v2 stack
+# ----------------------------------------------------------------------
+
+CONFIGS = [
+    ("baseline",    "baseline",    "local"),
+    ("selfish",     "selfish",     "local"),
+    ("coordinated", "coordinated", "global"),
+    ("advanced",    "advanced",    "global"),   # rep², coalition bonus 3.0, 2× honesty pen
+]
+
+SEEDS = [0, 1, 2]
+
+
+# ----------------------------------------------------------------------
 # Episode runner
 # ----------------------------------------------------------------------
 
-def run_episode(env):
+def run_episode(env, demo_log=False):
+    """
+    Run a full episode using the env's internal mode policy.
+    Returns (history_dict, summary_dict).
+    Extra metrics introduced in v2 (misreporting_rate, coalition_rate,
+    delayed_failures_triggered) are pulled from info each step and stored
+    so plots.py can access them as mean curves.
+    """
     obs, _ = env.reset()
-    done = False
+    done   = False
+
+    # Extend history with v2 keys if not present
+    for key in ("misreporting", "coalition", "delayed_failures"):
+        if key not in env.history:
+            env.history[key] = []
 
     while not done:
         obs, reward, term, trunc, info = env.step(None)
         done = term or trunc
 
-    return env.get_history(), env.summarize_episode()
+        if demo_log and env.time == 12:
+            print(f"\n[STEP {env.time}]")
+            print(f"Mode: {env.mode}")
+            print(f"Blackouts: {info.get('blackouts', 0)}")
+            print(f"Misreporting: {info.get('honesty_violations', 0)}")
+            c_state = "active" if info.get('coalition_rate', 0.0) > 0 else "inactive"
+            print(f"Coalition: {c_state}\n")
+
+        # Back-fill v2 metrics (env already appends standard ones in step())
+        env.history["misreporting"].append(info.get("misreporting_rate",    0.0))
+        env.history["coalition"].append(   info.get("coalition_rate",       0.0))
+        env.history["delayed_failures"].append(
+            info.get("delayed_failures_triggered", 0)
+        )
+
+    history = env.get_history()
+    summary = env.summarize_episode()
+    # Augment summary with v2 averages
+    summary["avg_misreporting"]    = float(np.mean(history["misreporting"]))
+    summary["avg_coalition_rate"]  = float(np.mean(history["coalition"]))
+    summary["avg_delayed_failures"]= float(np.sum(history["delayed_failures"]))
+    return history, summary
 
 
 # ----------------------------------------------------------------------
 # Multi-seed evaluation
 # ----------------------------------------------------------------------
 
-CONFIGS = [
-    ("baseline",    "local"),
-    ("selfish",     "local"),
-    ("coordinated", "global"),
-]
-
-SEEDS = [0, 1, 2]
-
-
 def run_all(seeds=SEEDS):
-    histories  = {mode: [] for mode, _ in CONFIGS}
-    summaries  = {mode: [] for mode, _ in CONFIGS}
+    histories = {name: [] for name, *_ in CONFIGS}
+    summaries = {name: [] for name, *_ in CONFIGS}
 
     for seed in seeds:
-        for mode, reward_mode in CONFIGS:
+        for name, mode, reward_mode in CONFIGS:
             env = GridOpsEnv(num_zones=3, max_time=50, seed=seed)
             env.set_mode(mode)
             env.set_reward_mode(reward_mode)
 
-            history, summary = run_episode(env)
-            histories[mode].append(history)
-            summaries[mode].append(summary)
+            demo = (seed == 0 and name == "coordinated")
+            history, summary = run_episode(env, demo_log=demo)
+            histories[name].append(history)
+            summaries[name].append(summary)
 
     return histories, summaries
 
 
 # ----------------------------------------------------------------------
-# Aggregation helper
+# Aggregation
 # ----------------------------------------------------------------------
+
+METRIC_KEYS = [
+    ("avg_reward",          "avg_reward"),
+    ("avg_blackouts",       "avg_blackouts"),
+    ("avg_imbalance",       "avg_imbalance"),
+    ("avg_stability",       "avg_stability"),
+    ("avg_misreporting",    "misreport"),
+    ("avg_coalition_rate",  "coalition"),
+    ("avg_delayed_failures","delayed_fail"),
+]
+
 
 def aggregate(summaries):
     agg = {}
-    for mode, runs in summaries.items():
-        agg[mode] = {
-            "avg_reward":    float(np.mean([r["avg_reward"]    for r in runs])),
-            "avg_blackouts": float(np.mean([r["avg_blackouts"] for r in runs])),
-            "avg_imbalance": float(np.mean([r["avg_imbalance"] for r in runs])),
-            "avg_stability": float(np.mean([r["avg_stability"] for r in runs])),
-        }
+    for name, runs in summaries.items():
+        agg[name] = {key: float(np.mean([r[key] for r in runs]))
+                     for key, _ in METRIC_KEYS}
     return agg
 
 
@@ -73,34 +120,30 @@ def aggregate(summaries):
 # ----------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("Running multi-seed evaluation …\n")
+    print("Running multi-seed evaluation ...\n")
     histories, summaries = run_all()
 
     agg = aggregate(summaries)
 
-    # --- print table ---
-    col = 14
-    header = (
-        f"{'mode':<{col}} | {'avg_reward':>{col}} | "
-        f"{'avg_blackouts':>{col}} | {'avg_imbalance':>{col}} | {'avg_stability':>{col}}"
-    )
+    # Print table
+    col    = 13
+    names  = [n for n, *_ in CONFIGS]
+    header = f"{'mode':<{col}}" + "".join(f" {label:>{col}}" for _, label in METRIC_KEYS)
     print(header)
     print("-" * len(header))
-    for mode in [m for m, _ in CONFIGS]:
-        s = agg[mode]
-        print(
-            f"{mode:<{col}} | {s['avg_reward']:>{col}.2f} | "
-            f"{s['avg_blackouts']:>{col}.2f} | "
-            f"{s['avg_imbalance']:>{col}.4f} | {s['avg_stability']:>{col}.4f}"
-        )
+    for name in names:
+        row = f"{name:<{col}}"
+        for key, _ in METRIC_KEYS:
+            row += f" {agg[name][key]:>{col}.3f}"
+        print(row)
 
-    # --- save JSON ---
-    results_json = {mode: summaries[mode] for mode, _ in CONFIGS}
+    # Save JSON
+    results_json = {name: summaries[name] for name, *_ in CONFIGS}
     with open("results.json", "w") as f:
         json.dump(results_json, f, indent=4)
     print("\nSaved results to results.json")
 
-    # --- generate plots ---
+    # Generate plots (existing)
     import importlib.util
     _spec = importlib.util.spec_from_file_location(
         "plots", os.path.join(os.path.dirname(__file__), "plots.py")
@@ -109,5 +152,53 @@ if __name__ == "__main__":
     _spec.loader.exec_module(_plots)
     _plots.generate_all_plots(histories, save_dir="plots")
 
-    print("\nCoordinated policy significantly reduces blackouts and improves "
-          "stability compared to selfish agents.")
+    # ------------------------------------------------------------------
+    # Research analysis
+    # ------------------------------------------------------------------
+    _aspec = importlib.util.spec_from_file_location(
+        "analyze", os.path.join(os.path.dirname(__file__), "analyze.py")
+    )
+    _analyze = importlib.util.module_from_spec(_aspec)
+    _aspec.loader.exec_module(_analyze)
+
+    # Ablation study
+    print("Running ablation study ...")
+    abl_histories, abl_summary = _analyze.run_ablation()
+    _analyze.plot_ablation(abl_summary, save_dir="plots")
+    _analyze.plot_emergence(histories, save_dir="plots")
+    _analyze.plot_delay_effects(histories, save_dir="plots")
+    _analyze.plot_tradeoff_curve(histories, save_dir="plots")
+    _analyze.plot_cascade_delay(histories, save_dir="plots")
+
+    # Policy comparison table
+    _analyze.print_policy_table(summaries)
+
+    # Auto insights
+    insights = _analyze.generate_insights(summaries, abl_summary)
+    print("Key Insights:")
+    for i, insight in enumerate(insights, 1):
+        print(f"  {i}. {insight}")
+
+    # Export outputs/
+    _analyze.export_outputs(summaries, abl_summary, out_dir="outputs")
+
+    adv_reward = agg["advanced"]["avg_reward"]
+    sel_reward = agg["selfish"]["avg_reward"]
+    reward_imp = (adv_reward - sel_reward) / sel_reward * 100
+
+    adv_mis = agg["advanced"]["avg_misreporting"] * 100
+    sel_mis = agg["selfish"]["avg_misreporting"] * 100
+
+    adv_stab = agg["advanced"]["avg_stability"]
+    sel_stab = agg["selfish"]["avg_stability"]
+    stab_gain = (adv_stab - sel_stab) / sel_stab * 100
+
+    print("\n----------------------------------------")
+    print("GRIDOPS++ RESULTS")
+    print("----------------------------------------")
+    print("Best Mode: Advanced")
+    print(f"Reward Improvement: +{reward_imp:.1f}%")
+    print(f"Misreport Reduction: {sel_mis:.0f}% -> {adv_mis:.0f}%")
+    print(f"Stability Gain: +{stab_gain:.1f}%")
+    print("----------------------------------------\n")
+
