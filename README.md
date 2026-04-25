@@ -94,15 +94,15 @@ We also trained a **Qwen2-0.5B LLM agent** using **Hugging Face TRL GRPO**, conn
 
 *Agent improves from -175 (frequent blackouts) → -103 (stable grid management) over 171K steps. Rolling average (window=10) shown in bold.*
 
-### Quantitative Improvement vs. Random Baseline
+### Quantitative Improvement: Before vs After Training
 
-| Metric | 🎲 Random Agent | 🤖 PPO+LSTM Agent | Improvement |
+| Metric | Start of Training | End of Training (171K steps) | Improvement |
 |---|---|---|---|
-| Avg. Episode Reward | -175 | **-103** | **+41%** |
-| Avg. Blackouts / Episode | 50.8 | 15.5 | **-69.4%** |
-| Grid Stability Score | 0.540 | 0.804 | **+48.8%** |
-| Avg. Episode Length | 10 steps | 16.5 steps | **+65%** |
-| Best Reward Achieved | — | **-103** (step 161,792) | — |
+| Avg Episode Reward | **-177** | **-103** | **+41.8%** |
+| Best Episode Reward | -177 | **-103** | **+41.8%** |
+| Rolling Avg (window 10) | ~-168 | ~-110 | **+34.5%** |
+
+*Evidence: Full training log in `outputs/training_logs.csv`. Reward curve committed to `plots/reward_curve.png`.*
 
 ---
 
