@@ -7,8 +7,8 @@ GridMind is an advanced reinforcement learning environment and control policy de
 | Deliverable | Link |
 |---|---|
 | 🤗 Hugging Face Space (Interactive Demo) | _[Add your HF Space URL here]_ |
-| 📓 Training Colab Notebook | _[Add your Colab link here]_ |
-| 💻 Code Repository | _[Add your GitHub repo link here]_ |
+| 📓 Training Colab Notebook | [Open in Colab](https://colab.research.google.com/drive/1EmmWb1ARTxdahHGn8u6k3Ak1Dh172tvc?usp=sharing) |
+| 💻 Code Repository | [github.com/TechLearnr4S/GridMind](https://github.com/TechLearnr4S/GridMind) |
 | 📹 Demo Video / Blog Post | _[Add your YouTube/HF blog link here]_ |
 
 > **All URLs must be filled in before submitting the Google Form.**
