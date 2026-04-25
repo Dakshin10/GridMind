@@ -116,6 +116,21 @@ class GridOpsEnv:
         self.coalition_var_threshold = 0.05
         self.coalition_bonus_value   = 2.0
 
+        # ── Enhanced reward weights ──────────────────────────────────────
+        # alpha: global system-risk penalty weight  (total unmet demand)
+        # beta:  instability metric weight          (overloads + cascade fraction)
+        # gamma: generator fuel-usage penalty weight
+        self.alpha_risk    = 0.5   # global system-risk penalty (total_unmet)
+        self.beta_instab   = 0.5
+        self.gamma_fuel    = 0.1
+
+        # Priority score mapping: priority class {1,2,3} -> criticality float
+        # 1 = low (residential), 2 = medium (commercial), 3 = critical (hospital)
+        self._priority_score_map = {1: 0.5, 2: 0.75, 3: 1.0}
+
+        # Fuel budget per episode (total generator capacity; resets each episode)
+        self.fuel_budget_per_episode = float(num_zones * 2.0 * max_steps * 0.5)  # ~150 for 3-zone, 50-step
+
         # Transient state — initialised properly in reset()
         self.prev_reward       = 0.0
         self.reward_components = {"served": 0.0, "blackout": 0.0, "stability": 0.0, "honesty": 0.0}
@@ -164,7 +179,9 @@ class GridOpsEnv:
             "total_reward": 0.0,
             "total_blackouts": 0,
             "avg_stability": [],
-            "misreport_events": 0
+            "misreport_events": 0,
+            "blackout_count": 0,
+            "total_unmet": 0.0
         }
         self.reputation = np.ones(self.num_zones, dtype=np.float32)
         self._init_state()
@@ -226,24 +243,27 @@ class GridOpsEnv:
         self._coalition_active = bool(np.var(bid_norm) < self.coalition_var_threshold)
         self._coalition_bonus  = self.coalition_bonus_value if self._coalition_active else 0.0
 
-        # ── 3) Safe allocation with conservation guarantee ─────────────
+        # ── 3) Safe allocation with partial dispatch support ─────────────
         total_action = float(np.sum(action)) + 1e-8
-        allocation   = (action / total_action).astype(np.float32)
+        if total_action > 1.0:
+            allocation = (action / total_action).astype(np.float32)
+        else:
+            allocation = action.astype(np.float32)
+            
         self.allocated = (allocation * float(self.total_power)).astype(np.float32)
 
         # Assert power conservation (debug)
         alloc_sum = float(np.sum(self.allocated))
-        if abs(alloc_sum - self.total_power) > 1e-3:
-            # Correct floating-point drift
+        if alloc_sum > self.total_power + 1e-3:
+            # Correct floating-point drift only if it exceeds total power
             self.allocated = (self.allocated / (alloc_sum + 1e-8) * self.total_power).astype(np.float32)
 
         # Advanced mode: bias allocation toward high-demand zones
         if self.mode == "advanced":
             weights = self.demand / (np.sum(self.demand) + 1e-8)
             self.allocated = (0.8 * self.allocated + 0.2 * weights * self.total_power).astype(np.float32)
-            # Re-normalise to conserve total_power
             alloc_sum = float(np.sum(self.allocated))
-            if alloc_sum > 1e-8:
+            if alloc_sum > self.total_power + 1e-8:
                 self.allocated = (self.allocated / alloc_sum * self.total_power).astype(np.float32)
 
         if np.any(np.isnan(self.allocated)):
@@ -280,19 +300,28 @@ class GridOpsEnv:
         info       = self._get_info()
         info["reward_components"] = {k: float(v) for k, v in self.reward_components.items()}
 
+        step_blackouts = int(np.sum(self.allocated < 0.4 * self.demand))
+        step_unmet = float(np.sum(np.maximum(0.0, self.demand - self.allocated)))
+
         info["global_score"] = float(reward)
+        info["blackout_count"] = step_blackouts
+        info["total_unmet"] = step_unmet
 
         self.episode_stats["total_reward"] += reward
         self.episode_stats["total_blackouts"] += int(info["blackouts"])
         self.episode_stats["avg_stability"].append(float(info["stability_score"]))
         self.episode_stats["misreport_events"] += int(info["honesty_violations"])
+        self.episode_stats["blackout_count"] += step_blackouts
+        self.episode_stats["total_unmet"] += step_unmet
 
         if terminated or truncated:
             info["episode_summary"] = {
                 "total_reward": float(self.episode_stats["total_reward"]),
                 "avg_stability": float(np.mean(self.episode_stats["avg_stability"])) if self.episode_stats["avg_stability"] else 0.0,
                 "total_blackouts": int(self.episode_stats["total_blackouts"]),
-                "misreport_rate": float(self.episode_stats["misreport_events"] / (self.time_step * self.num_zones))
+                "misreport_rate": float(self.episode_stats["misreport_events"] / (self.time_step * self.num_zones)),
+                "blackout_count": int(self.episode_stats["blackout_count"]),
+                "total_unmet": float(self.episode_stats["total_unmet"])
             }
 
         # ── 8) Debug assertions ────────────────────────────────────────
@@ -363,6 +392,20 @@ class GridOpsEnv:
         self.priority  = self.rng.integers(1, 4, size=self.num_zones)   # {1,2,3}
         self.failed    = np.zeros(self.num_zones, dtype=bool)
 
+        # ── Enhanced state: criticality + temporal + generator ───────────
+        # Float priority score per zone (criticality weight for reward)
+        self.priority_score = np.array(
+            [self._priority_score_map[int(p)] for p in self.priority],
+            dtype=np.float32
+        )
+
+        # Temporal signal: previous step's demand (initialised to current demand)
+        self.prev_demand = self.demand.copy()
+
+        # Generator fuel tracking: budget consumed so far this episode
+        self.fuel_used   = 0.0
+        self.fuel_budget = self.fuel_budget_per_episode
+
         self.failure_queue = []
 
         self.memory = {
@@ -398,6 +441,9 @@ class GridOpsEnv:
     # ------------------------------------------------------------------
 
     def _dynamics(self):
+        # ── Save previous demand before updating (temporal signal) ────────
+        self.prev_demand = self.demand.copy()
+
         demand = self.base_demand.copy()
         
         if 8 <= self.time_step < 16:
@@ -407,6 +453,9 @@ class GridOpsEnv:
             
         noise = self.rng.normal(0, 0.05 * demand).astype(np.float32)
         self.demand = np.maximum(demand + noise, 0.1).astype(np.float32)
+
+        # ── Track fuel consumption: power dispatched this step ────────────
+        self.fuel_used += float(np.sum(self.allocated))
 
         # Fault masks
         self._overload_mask = self.allocated > 1.3 * self.demand
@@ -434,7 +483,8 @@ class GridOpsEnv:
         if self._overload_mask.any():
             self.total_power = max(float(self.total_power * 0.9), 0.1)
         else:
-            self.total_power = min(float(self.total_power * 1.02), max_power)
+            safe_limit = min(max_power, 1.2 * float(np.sum(self.demand)))
+            self.total_power = min(float(self.total_power * 1.02), safe_limit)
 
     def _process_failure_queue(self) -> int:
         """Decrement delays; apply losses when delay hits 0. Returns count triggered."""
@@ -478,84 +528,44 @@ class GridOpsEnv:
     # ------------------------------------------------------------------
 
     def _compute_reward(self) -> float:
-        served       = np.minimum(self.allocated, self.demand)
+        served      = np.minimum(self.allocated, self.demand)
 
-        fault_count = float(self.failed.sum())
-        misreport_rate = float(self._misreport_mask.mean())
+        unmet       = np.maximum(0.0, self.demand - self.allocated)
+        total_unmet = float(np.sum(unmet))
+        
+        # Penalize unused power to prevent over-defensive hoarding
+        wasted_capacity = float(max(0.0, self.total_power - np.sum(self.allocated)))
 
         served_norm    = float(served.sum() / (self.demand.sum() + 1e-8))
-        blackout_norm  = float(fault_count / self.num_zones)
+        
+        blackout = (self.allocated < 0.4 * self.demand)
+        blackout_penalty = float(np.sum(blackout.astype(np.float32)))
+
         weighted       = self.allocated * self.demand
         stability_norm = 1.0 - np.std(weighted) / (np.mean(weighted) + 1e-8)
         stability_norm = float(np.clip(stability_norm, 0.0, 1.0))
-        honesty_norm   = misreport_rate
 
         self.reward_components = {
             "served":    float(served_norm),
-            "blackout":  float(blackout_norm),
+            "blackout":  float(blackout_penalty),
             "stability": float(stability_norm),
-            "honesty":   float(honesty_norm),
+            "honesty":   0.0,
         }
 
-        progress = min(0.5, self.time_step / self.max_steps)
-        w_served = 1.5 + 0.5 * progress
-        w_stability = 1.0 + 0.5 * progress
-
-        core = (
-            w_served * served_norm
-            - 2.0 * blackout_norm
-            + w_stability * stability_norm
-            - 2.0 * honesty_norm
+        reward = (
+            + 1.0 * served_norm           # Reward high served demand
+            + 0.1 * stability_norm        # Weak but present stability signal
+            - 5.0 * blackout_penalty      # Strong blackout penalty
+            - 0.3 * total_unmet           # Increased penalty for unmet demand
+            - 0.15 * wasted_capacity      # Slightly increased penalty for unused power
         )
 
-        reward = 0.0
-
-        threshold = 1.0 * np.mean(self.allocated)
-        if np.std(self.allocated) > threshold:
-            reward -= 0.5
-
-        if fault_count > 0:
-            reward -= 0.2 * fault_count
-
-        if len(self.history["faults"]) >= 2:
-            past_faults = np.array(self.history["faults"][-2])
-            if np.any(past_faults) and np.any(self._blackout_mask):
-                reward -= 0.3
-
-        if fault_count == 0:
-            reward += 0.02
-        if np.any(self._overload_mask):
-            reward -= 0.02
-        if np.std(self.allocated) < 0.1 * np.mean(self.allocated):
-            reward += 0.01
-
-        temporal_bonus = 0.0
-        if len(self.history["allocations"]) > 0:
-            prev_alloc = np.array(self.history["allocations"][-1])
-            change = float(np.mean(np.abs(self.allocated - prev_alloc)))
-            temporal_bonus = 0.03 * float(1.0 - np.clip(change, 0.0, 1.0))
-
-        # Fairness reward
-        spread = (np.max(self.allocated) - np.min(self.allocated)) / (np.mean(self.allocated) + 1e-8)
-        fairness_bonus = 0.03 * float(np.clip(1.0 - spread, 0.0, 1.0))
-
-        # Priority-aware reward
-        priority_score = np.sum(self.allocated * self.priority) / (np.sum(self.priority) + 1e-8)
-        priority_bonus = 0.1 * float(priority_score)
-
-        bonus = temporal_bonus + fairness_bonus + priority_bonus
-        bonus = float(np.clip(bonus, 0.0, 0.2))
-        reward += bonus
-
-        # Advanced-mode exclusive bonuses
-        if self.mode == "advanced":
-            reward += 0.15 * float(priority_score)
-            reward += 0.05 * float(stability_norm)
-            rep_factor = float(np.mean(self.reputation))
-            reward += 0.05 * rep_factor
-
-        reward = float(np.clip(0.8 * core + 0.2 * reward, -5.0, 5.0))
-        assert -5.0 <= reward <= 5.0, f"Reward out of bounds: {reward}"
+        if not np.isfinite(reward):
+            reward = 0.0
+            
+        reward = float(np.clip(reward, -5.0, 5.0))
+        reward = float(np.tanh(reward))
+        assert np.isfinite(reward), "Reward must be finite"
         return reward
 
     def _compute_local_rewards(self) -> np.ndarray:
@@ -575,8 +585,16 @@ class GridOpsEnv:
             time_step  = int(self.time_step),
         ).to_dict()
 
-        obs["priority"]    = self.priority.tolist()
-        obs["total_power"] = float(self.total_power)
+        obs["priority"]      = self.priority.tolist()
+        obs["total_power"]   = float(self.total_power)
+        # ── Enhanced observations ──────────────────────────────────────────
+        # Temporal signal: previous step demand (3 values)
+        obs["prev_demand"]   = self.prev_demand.tolist()
+        # Generator constraint: remaining fuel fraction (scalar)
+        fuel_remaining = float(np.clip(
+            1.0 - self.fuel_used / (self.fuel_budget + 1e-8), 0.0, 1.0
+        ))
+        obs["fuel_remaining"] = fuel_remaining
         if self.memory["summary"]:
             obs["memory_summary"] = {
                 k: float(v) for k, v in self.memory["summary"].items()

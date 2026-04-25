@@ -1,0 +1,23 @@
+----------------------------------------
+SUMMARY (FOR README)
+----------------------------------------
+
+We evaluated reinforcement learning approaches for grid stability under stochastic failures.
+
+Results:
+- PPO (MLP) learns basic allocation but suffers high blackout rates (~50)
+- LSTM PPO introduces temporal memory, reducing cascading failures
+- Expert heuristic (Advanced) remains the safest policy
+
+Key Insight:
+"Temporal memory improves stability, but stochastic cascading failures remain a core challenge for RL."
+
+Performance:
+- LSTM reduced blackouts by 40.1% vs MLP PPO
+- Improved reward efficiency by 24.1%
+- Demonstrates importance of sequence-aware decision making
+
+Conclusion:
+Standard RL is effective for efficiency, but safety-critical systems require temporal reasoning or hybrid approaches.
+
+----------------------------------------

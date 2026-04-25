@@ -3,9 +3,16 @@ import sys
 import json
 import numpy as np
 
+import sys
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from env.gridops_env import GridOpsEnv
-
+import gymnasium as gym
+from gymnasium.spaces import Box
+from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 # ----------------------------------------------------------------------
 # Configurations  (name, mode, reward_mode)
@@ -231,4 +238,94 @@ if __name__ == "__main__":
     print(f"Stability Gain: +{stability_gain:.3f} (vs coordinated)")
     print(f"Stability Gain (%): +{stability_gain_pct:.1f}%")
     print("----------------------------------------\n")
+
+
+# ----------------------------------------------------------------------
+# PPO RL Training Setup
+# ----------------------------------------------------------------------
+
+class GridOpsEnvWrapper(gym.Env):
+    def __init__(self):
+        super().__init__()
+        self.env = GridOpsEnv(mode="advanced")
+        self.env.set_reward_mode("global")
+        
+        # 3 zones -> shape (3,)
+        self.action_space = Box(low=0.0, high=1.0, shape=(3,), dtype=np.float32)
+        
+        # Observation breakdown (21 dims):
+        # demand(3) + supply(3) + reputation(3) + faults(3) + time_step(1)
+        # + priority(3) + total_power(1) + prev_demand(3) + fuel_remaining(1) = 21
+        self.observation_space = Box(low=-np.inf, high=np.inf, shape=(21,), dtype=np.float32)
+
+    def _flatten_obs(self, obs):
+        return np.concatenate([
+            obs["demand"],
+            obs["supply"],
+            obs["reputation"],
+            obs["faults"],
+            [float(obs["time_step"])],
+            obs["priority"],
+            [obs["total_power"]],
+            obs["prev_demand"],          # temporal signal (3)
+            [obs["fuel_remaining"]],     # generator constraint (1)
+        ]).astype(np.float32)
+
+    def reset(self, seed=None, options=None):
+        if seed is not None:
+            self.env.seed(seed)
+        obs, _ = self.env.reset()
+        return self._flatten_obs(obs), {}
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        return self._flatten_obs(obs), reward, terminated, truncated, info
+
+
+class RewardLogger(BaseCallback):
+    def __init__(self):
+        super().__init__()
+        self.rewards = []
+
+    def _on_step(self):
+        if "infos" in self.locals:
+            for info in self.locals["infos"]:
+                if "episode" in info:
+                    self.rewards.append(info["episode"]["r"])
+        return True
+
+
+def train_ppo(total_timesteps=100000):
+    print("Setting up PPO Environment...")
+    env = DummyVecEnv([lambda: Monitor(GridOpsEnvWrapper())])
+    env = VecNormalize(env, norm_obs=True, norm_reward=False)
+    
+    model = PPO(
+        "MlpPolicy",
+        env,
+        learning_rate=3e-4,
+        n_steps=2048,
+        batch_size=64,
+        gamma=0.99,
+        gae_lambda=0.95,
+        clip_range=0.2,
+        verbose=1
+    )
+    
+    logger = RewardLogger()
+    
+    print(f"Starting PPO training for {total_timesteps} timesteps...")
+    model.learn(
+        total_timesteps=total_timesteps,
+        callback=logger
+    )
+    
+    os.makedirs("models", exist_ok=True)
+    os.makedirs("outputs", exist_ok=True)
+    
+    model.save("models/ppo_fixed")
+    env.save("models/vecnormalize.pkl")
+    np.save("outputs/train_rewards_fixed.npy", logger.rewards)
+    print("Training complete. Model saved to 'models/ppo_fixed', env stats to 'models/vecnormalize.pkl', and rewards to 'outputs/train_rewards_fixed.npy'.")
+
 
