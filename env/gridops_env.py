@@ -261,13 +261,17 @@ class GridOpsEnv(Env):
         priority_labels = {1: "Residential (low)", 2: "Commercial (medium)", 3: "Hospital/Critical (HIGH)"}
         obs = self._get_obs()
         priorities = obs.get("priority", [1] * self.num_zones)
+        faults = obs.get("faults", [0.0] * self.num_zones)
+        demands = obs.get("demand", [0.0] * self.num_zones)
+        supplies = obs.get("supply", [0.0] * self.num_zones)
+        reps = obs.get("reputation", [1.0] * self.num_zones)
         zone_lines = []
         for i in range(self.num_zones):
             ptype = priority_labels.get(int(priorities[i]), "Unknown")
-            fault_status = "⚠️ FAULT DETECTED" if self.faults[i] > 0 else "✅ Healthy"
+            fault_status = "⚠️ FAULT DETECTED" if faults[i] > 0 else "✅ Healthy"
             zone_lines.append(
-                f"  Zone {i+1} [{ptype}]: demand={self.demand[i]:.3f}, "
-                f"supply={self.supply[i]:.3f}, reputation={self.reputation[i]:.2f}, "
+                f"  Zone {i+1} [{ptype}]: demand={demands[i]:.3f}, "
+                f"supply={supplies[i]:.3f}, reputation={reps[i]:.2f}, "
                 f"status={fault_status}"
             )
 
