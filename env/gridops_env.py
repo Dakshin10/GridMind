@@ -5,6 +5,59 @@ import numpy as np
 from dataclasses import dataclass
 from typing import List
 
+from openenv.env import Env
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Composable Reward Rubric
+# ──────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class GridMindRubric:
+    """Composable reward rubric for GridOpsEnv.
+
+    Each component is independently inspectable and weighted.
+    This design follows the OpenEnv principle: composable rubrics > monolithic scoring.
+
+    Components
+    ----------
+    served_reward    : reward for successfully delivering power to zones
+    blackout_penalty : heavy penalty per blackout event (-6.0 each)
+    system_risk      : penalty for total unmet demand across the grid
+    instability      : penalty for overload accumulation (cascade precursor)
+    fuel_penalty     : penalty for generator overconsumption
+    coalition_bonus  : bonus when all zones cooperate within 5% demand variance
+    """
+    served_reward:    float = 0.0
+    blackout_penalty: float = 0.0   # weight: -6.0 per event
+    system_risk:      float = 0.0   # weight: -0.5
+    instability:      float = 0.0   # weight: -0.5
+    fuel_penalty:     float = 0.0   # weight: -0.1
+    coalition_bonus:  float = 0.0   # weight: +2.0
+
+    def total(self) -> float:
+        """Compute the total scalar reward from all rubric components."""
+        return (
+            self.served_reward
+            - 6.0  * self.blackout_penalty
+            - 0.5  * self.system_risk
+            - 0.5  * self.instability
+            - 0.1  * self.fuel_penalty
+            + 2.0  * self.coalition_bonus
+        )
+
+    def breakdown(self) -> dict:
+        """Return a human-readable breakdown of reward components."""
+        return {
+            "served_reward":    round(self.served_reward, 4),
+            "blackout_penalty": round(-6.0 * self.blackout_penalty, 4),
+            "system_risk":      round(-0.5 * self.system_risk, 4),
+            "instability":      round(-0.5 * self.instability, 4),
+            "fuel_penalty":     round(-0.1 * self.fuel_penalty, 4),
+            "coalition_bonus":  round(+2.0 * self.coalition_bonus, 4),
+            "total":            round(self.total(), 4),
+        }
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Structured I/O dataclasses
@@ -58,7 +111,7 @@ class GridObservation:
         }
 
 
-class GridOpsEnv:
+class GridOpsEnv(Env):
     """
     Multi-zone power grid environment with bidding-based allocation.
     Gym-style API: reset() → (obs, info), step() → (obs, reward, terminated, truncated, info).
@@ -137,6 +190,14 @@ class GridOpsEnv:
 
         self.seed(seed)
 
+        # OpenEnv base class init
+        super().__init__(
+            name="GridOps++",
+            state_space={"demand": "vector", "supply": "vector", "reputation": "vector", "faults": "vector", "time_step": "scalar"},
+            action_space={"allocation": "continuous_vector"},
+            episode_max_length=max_steps,
+        )
+
     # ------------------------------------------------------------------
     # Public setters
     # ------------------------------------------------------------------
@@ -161,6 +222,73 @@ class GridOpsEnv:
         if np.sum(action) <= 0:
             action = np.ones(self.num_zones, dtype=np.float32) / self.num_zones
         return action.astype(np.float32)
+
+    # ------------------------------------------------------------------
+    # OpenEnv Required: state() + LLM-native state_to_text()
+    # ------------------------------------------------------------------
+
+    def state(self) -> dict:
+        """Return the current environment state as a structured dict.
+
+        Required by the OpenEnv Gym-style API (reset / step / state).
+        Returns a JSON-serialisable snapshot of the full grid state,
+        including reward component history and episode statistics.
+        """
+        obs = self._get_obs() if hasattr(self, 'demand') else {}
+        return {
+            "observation": obs,
+            "episode_stats": getattr(self, 'episode_stats', {}),
+            "reward_components": getattr(self, 'reward_components', {}),
+            "time_step": getattr(self, 'time_step', 0),
+            "done": getattr(self, 'time_step', 0) >= self.max_steps,
+        }
+
+    def state_to_text(self) -> str:
+        """Convert the current grid state to a rich natural-language prompt.
+
+        This method enables native LLM training via HF TRL / Unsloth:
+        the LLM receives a text description and must output a power allocation.
+
+        Returns
+        -------
+        str
+            A detailed, structured natural-language description of the grid state
+            suitable for use as an LLM prompt.
+        """
+        if not hasattr(self, 'demand'):
+            return "Grid not initialised. Call reset() first."
+
+        priority_labels = {1: "Residential (low)", 2: "Commercial (medium)", 3: "Hospital/Critical (HIGH)"}
+        obs = self._get_obs()
+        priorities = obs.get("priority", [1] * self.num_zones)
+        faults = obs.get("faults", [0.0] * self.num_zones)
+        demands = obs.get("demand", [0.0] * self.num_zones)
+        supplies = obs.get("supply", [0.0] * self.num_zones)
+        reps = obs.get("reputation", [1.0] * self.num_zones)
+        zone_lines = []
+        for i in range(self.num_zones):
+            ptype = priority_labels.get(int(priorities[i]), "Unknown")
+            fault_status = "⚠️ FAULT DETECTED" if faults[i] > 0 else "✅ Healthy"
+            zone_lines.append(
+                f"  Zone {i+1} [{ptype}]: demand={demands[i]:.3f}, "
+                f"supply={supplies[i]:.3f}, reputation={reps[i]:.2f}, "
+                f"status={fault_status}"
+            )
+
+        zones_text = "\n".join(zone_lines)
+        step_pct = f"{(self.time_step / self.max_steps * 100):.0f}%"
+
+        return (
+            f"=== POWER GRID STATE (Step {self.time_step}/{self.max_steps} — {step_pct} complete) ===\n"
+            f"\nGrid Zones:\n{zones_text}\n"
+            f"\nEpisode so far:\n"
+            f"  Blackouts: {self.episode_stats.get('total_blackouts', 0)}\n"
+            f"  Total unmet demand: {self.episode_stats.get('total_unmet', 0.0):.3f}\n"
+            f"  Total reward: {self.episode_stats.get('total_reward', 0.0):.2f}\n"
+            f"\nTask: Allocate power to {self.num_zones} zones as fractions summing to 1.0.\n"
+            f"Priority: Serve Zone 3 (Hospital) first. Avoid overloads — they cascade into blackouts.\n"
+            f"Reply with exactly {self.num_zones} space-separated floats. Example: 0.20 0.30 0.50"
+        )
 
     # ------------------------------------------------------------------
     # Core API
