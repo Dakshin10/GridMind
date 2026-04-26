@@ -181,7 +181,7 @@ def ui_manual_step(z1, z2, z3):
     return sim.step(action=[z1, z2, z3], manual=True)
 
 # --- UI LAYOUT ---
-with gr.Blocks(theme=gr.themes.Base()) as demo:
+with gr.Blocks() as demo:
     
     # 1. HEADER
     with gr.Row():
@@ -238,4 +238,4 @@ with gr.Blocks(theme=gr.themes.Base()) as demo:
     btn_manual_step.click(fn=ui_manual_step, inputs=[slider_z1, slider_z2, slider_z3], outputs=outputs)
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(theme=gr.themes.Base())
