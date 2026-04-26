@@ -224,6 +224,67 @@ class GridOpsEnv(Env):
         return action.astype(np.float32)
 
     # ------------------------------------------------------------------
+    # OpenEnv Required: state() + LLM-native state_to_text()
+    # ------------------------------------------------------------------
+
+    def state(self) -> dict:
+        """Return the current environment state as a structured dict.
+
+        Required by the OpenEnv Gym-style API (reset / step / state).
+        Returns a JSON-serialisable snapshot of the full grid state,
+        including reward component history and episode statistics.
+        """
+        obs = self._get_obs() if hasattr(self, 'demand') else {}
+        return {
+            "observation": obs,
+            "episode_stats": getattr(self, 'episode_stats', {}),
+            "reward_components": getattr(self, 'reward_components', {}),
+            "time_step": getattr(self, 'time_step', 0),
+            "done": getattr(self, 'time_step', 0) >= self.max_steps,
+        }
+
+    def state_to_text(self) -> str:
+        """Convert the current grid state to a rich natural-language prompt.
+
+        This method enables native LLM training via HF TRL / Unsloth:
+        the LLM receives a text description and must output a power allocation.
+
+        Returns
+        -------
+        str
+            A detailed, structured natural-language description of the grid state
+            suitable for use as an LLM prompt.
+        """
+        if not hasattr(self, 'demand'):
+            return "Grid not initialised. Call reset() first."
+
+        priority_labels = {1: "Residential (low)", 2: "Commercial (medium)", 3: "Hospital/Critical (HIGH)"}
+        zone_lines = []
+        for i in range(self.num_zones):
+            ptype = priority_labels.get(int(self.zone_priorities[i]), "Unknown")
+            fault_status = "⚠️ FAULT DETECTED" if self.faults[i] > 0 else "✅ Healthy"
+            zone_lines.append(
+                f"  Zone {i+1} [{ptype}]: demand={self.demand[i]:.3f}, "
+                f"supply={self.supply[i]:.3f}, reputation={self.reputation[i]:.2f}, "
+                f"status={fault_status}"
+            )
+
+        zones_text = "\n".join(zone_lines)
+        step_pct = f"{(self.time_step / self.max_steps * 100):.0f}%"
+
+        return (
+            f"=== POWER GRID STATE (Step {self.time_step}/{self.max_steps} — {step_pct} complete) ===\n"
+            f"\nGrid Zones:\n{zones_text}\n"
+            f"\nEpisode so far:\n"
+            f"  Blackouts: {self.episode_stats.get('total_blackouts', 0)}\n"
+            f"  Total unmet demand: {self.episode_stats.get('total_unmet', 0.0):.3f}\n"
+            f"  Total reward: {self.episode_stats.get('total_reward', 0.0):.2f}\n"
+            f"\nTask: Allocate power to {self.num_zones} zones as fractions summing to 1.0.\n"
+            f"Priority: Serve Zone 3 (Hospital) first. Avoid overloads — they cascade into blackouts.\n"
+            f"Reply with exactly {self.num_zones} space-separated floats. Example: 0.20 0.30 0.50"
+        )
+
+    # ------------------------------------------------------------------
     # Core API
     # ------------------------------------------------------------------
 
