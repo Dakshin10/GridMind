@@ -4,8 +4,8 @@
 > *Can an AI learn to manage a collapsing power grid better than human operators?*
 
 **🏆 Live Interactive Demo:** [Play with the Agent on Hugging Face](https://huggingface.co/spaces/TechLearnr4S/Grid_Mind)  
-**📓 Training Code:** [Run the Colab Notebook](https://colab.research.google.com/drive/1EmmWb1ARTxdahHGn8u6k3Ak1Dh172tvc?usp=sharing)  
-**📹 Presentation Video:** [Watch the 2-Minute Demo](https://youtu.be/GridMindDemo)
+**📓 Training Code:** [Run the Colab Notebook](https://colab.research.google.com/drive/18i-PpU-2eNl9NtSUFlkxVbyp4Er6xh69?usp=sharing)  
+**📝 Project Blog & Writeup:** [Read blog.md](./blog.md)
 
 ---
 
