@@ -72,7 +72,29 @@ reward = served_reward
        + 2.0  × coalition_bonus          # if zones cooperate within 5% variance
 ```
 
-### Composable Rubric System
+### LLM-Native Training via `state_to_text()`
+
+GridOpsEnv exposes `state_to_text()` — converting the grid state into a rich natural-language prompt. This enables direct LLM training with HF TRL / Unsloth without any custom wrappers:
+
+```
+=== POWER GRID STATE (Step 12/50 — 24% complete) ===
+
+Grid Zones:
+  Zone 1 [Commercial (medium)]: demand=0.974, supply=0.312, reputation=0.91, status=✅ Healthy
+  Zone 2 [Residential (low)]:   demand=1.635, supply=0.445, reputation=1.00, status=⚠️ FAULT DETECTED
+  Zone 3 [Hospital/Critical]:   demand=0.786, supply=0.243, reputation=1.00, status=✅ Healthy
+
+Episode so far:
+  Blackouts: 2  |  Total unmet demand: 3.241  |  Total reward: -48.20
+
+Task: Allocate power to 3 zones as fractions summing to 1.0.
+Priority: Serve Zone 3 (Hospital) first. Avoid overloads — they cascade into blackouts.
+Reply with exactly 3 space-separated floats. Example: 0.20 0.30 0.50
+```
+
+The LLM reads this, reasons about fault status and priorities, and outputs `0.20 0.30 0.50`. The environment returns a reward. TRL GRPO updates the model. **This is end-to-end LLM training on a real-world problem.**
+
+
 
 Each reward component is independently named, weighted, and inspectable via `GridMindRubric`:
 
