@@ -9,7 +9,7 @@
 
 | Deliverable | Link |
 |---|---|
-| 🤗 **HF Space (Live Demo)** | [TechLearnr4S/GridMind](https://huggingface.co/spaces/TechLearnr4S/GridMind) |
+| 🤗 **HF Space (Live Demo)** | [TechLearnr4S/Grid_Mind](https://huggingface.co/spaces/TechLearnr4S/Grid_Mind) |
 | 📓 **Training Notebook (Colab)** | [Open in Colab ↗](https://colab.research.google.com/drive/1EmmWb1ARTxdahHGn8u6k3Ak1Dh172tvc?usp=sharing) |
 | 💻 **GitHub Repository** | [TechLearnr4S/GridMind](https://github.com/TechLearnr4S/GridMind) |
 | 📹 **Demo Video / Blog Post** | [Watch Demo Video](https://youtu.be/GridMindDemo) |
@@ -234,7 +234,7 @@ The training loop connects directly to GridOpsEnv via `reset()` / `step()` — n
 
 ## 🚀 Try It Yourself
 
-**Live Demo:** [huggingface.co/spaces/TechLearnr4S/GridMind](https://huggingface.co/spaces/TechLearnr4S/GridMind)
+**Live Demo:** [huggingface.co/spaces/TechLearnr4S/Grid_Mind](https://huggingface.co/spaces/TechLearnr4S/Grid_Mind)
 
 ```bash
 # Run locally
